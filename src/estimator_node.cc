@@ -185,7 +185,9 @@ int main(int argc, char **argv) {
     nh_ptr = boost::make_shared<ros::NodeHandle>(nh);
   }
 
-  nh_ptr->param("config_file", config_file, std::string("/home/hyye/dev_ws/src/lio/config/test_config.yaml"));
+  //ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+
+  nh_ptr->param("config_file", config_file, std::string("/home/sst/catkin_lio/src/-mapping/config/test_100t8.yaml"));
   FLAGS_alsologtostderr = true;
 
   Run();

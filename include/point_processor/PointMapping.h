@@ -66,6 +66,7 @@
 #include <glog/logging.h>
 
 #include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
 
@@ -223,11 +224,13 @@ class PointMapping {
   pcl::VoxelGrid<pcl::PointXYZI> down_size_filter_map_;      ///< voxel filter for down sizing accumulated map
 
   nav_msgs::Odometry odom_aft_mapped_;      ///< mapping odometry message
+  nav_msgs::Path path_aft_mapped_;
   tf::StampedTransform aft_mapped_trans_;   ///< mapping odometry transformation
 
   ros::Publisher pub_laser_cloud_surround_;    ///< map cloud message publisher
   ros::Publisher pub_full_cloud_;     ///< current full resolution cloud message publisher
   ros::Publisher pub_odom_aft_mapped_;         ///< mapping odometry publisher
+  ros::Publisher pub_path_aft_mapped_;         ///< mapping odometry publisher
   tf::TransformBroadcaster tf_broadcaster_;  ///< mapping odometry transform broadcaster
 
   ros::Subscriber sub_laser_cloud_corner_last_;   ///< last corner cloud message subscriber

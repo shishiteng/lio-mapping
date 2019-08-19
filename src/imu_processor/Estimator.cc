@@ -950,11 +950,11 @@ bool Estimator::RunInitialization()
 
     DLOG(INFO) << "IMU variation: " << var;
 
-    if (var < 0.25)
-    {
-      ROS_INFO("IMU excitation not enough!");
-      return false;
-    }
+    // if (var < 0.25)
+    // {
+    //   ROS_INFO("IMU excitation not enough!");
+    //   return false;
+    // }
   }
 
   Eigen::Vector3d g_vec_in_laser;

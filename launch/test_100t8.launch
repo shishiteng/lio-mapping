@@ -4,10 +4,12 @@
 
   <node pkg="lio" type="lio_processor_node" name="lio_processor" output="log">
     <param name="rad_diff" type="double" value="0.2" />
+    <remap from="/velodyne_points" to="/rslidar_points"/>
   </node>
  
   <node pkg="lio" type="lio_estimator_node" name="lio_estimator" output="screen">
     <param name="config_file" type="string" value="$(find lio)/config/100t8.yaml" />
+    <remap from="/imu/data" to="/imu0"/>
   </node>
 
 </launch>

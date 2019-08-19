@@ -32,6 +32,9 @@ find_package(Gflags)
 find_package(Glog)
 include_directories(${GFLAGS_INCLUDE_DIRS} ${GLOG_INCLUDE_DIRS})
 
+find_package(GTSAM REQUIRED)
+include_directories(${GTSAM_INCLUDE_DIR})
+
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
@@ -161,6 +164,7 @@ set(lio_EXT_LIBS
   ${OpenCV_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG_LIBRARIES}
+  gtsam
 )
 
 set(point_processor_EXT_LIBS
@@ -323,6 +327,15 @@ target_link_libraries(${PROJECT_NAME}_map_builder_node
   ${PROJECT_NAME}-point-processor
   ${point_processor_EXT_LIBS}
 )
+
+# loop closure
+add_executable(${PROJECT_NAME}_loopclosure_node 
+  src/loop_closure_node.cc
+  src/loop_closure/loop_closure.cc)
+target_link_libraries(${PROJECT_NAME}_loopclosure_node
+  ${lio_EXT_LIBS}
+  ${catkin_LIBRARIES}
+  )
 
 add_executable(${PROJECT_NAME}_save_bag_to_pcd src/save_bag_to_pcd.cc)
 add_dependencies(${PROJECT_NAME}_save_bag_to_pcd

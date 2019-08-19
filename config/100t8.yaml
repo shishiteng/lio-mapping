@@ -9,8 +9,8 @@ surf_filter_size: 0.4
 map_filter_size: 0.6
 
 # window sizes
-window_size: 7
-opt_window_size: 5
+window_size: 6
+opt_window_size: 4
 
 init_window_factor: 1
 
@@ -46,7 +46,7 @@ plane_projection_factor: 0
 imu_factor: 1
 point_distance_factor: 1
 
-prior_factor: 0
+prior_factor: 1
 
 marginalization_factor: 1
 
@@ -55,7 +55,7 @@ odom_io: 3
 pcl_viewer: 0
 
 # IMU noises
-acc_n: 0.2
+acc_n: 0.1
 gyr_n: 0.02
 acc_w: 0.0002
 gyr_w: 2.0e-5

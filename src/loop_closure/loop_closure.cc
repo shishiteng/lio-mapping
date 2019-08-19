@@ -15,7 +15,7 @@ bool LoopClosure::Initialize(const ros::NodeHandle &n)
     ros::NodeHandle nl(n);
 
     //sub_path_ = nl.subscribe("/vins_estimator/lidar_path", 100, &LoopClosure::PathCallback, this);
-    sub_path_ = nl.subscribe("/vins_estimator/path", 100, &LoopClosure::PathCallback, this);
+    sub_path_ = nl.subscribe("/path_aft_mapped", 100, &LoopClosure::PathCallback, this);
     sub_points_ = nl.subscribe("/rslidar_points", 1, &LoopClosure::PointCloudCallback, this);
 
     pub_path_loop_ = nl.advertise<nav_msgs::Path>("path_loop", 10, false);
@@ -148,15 +148,12 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     gtsam::Pose3 loop_pose = initial_estimate.at<gtsam::Pose3>(loop_key);   //RosToGtsam(path_.poses[pose_size - 1].pose);
     delta = loop_pose.between(loop_pose);
 
-    // ICP求解delta
+    // TODO:ICP求解delta
 
     gtsam::NonlinearFactorGraph new_factor3;
     new_factor3.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, prior_model));
     isam->update(new_factor3, Values());
     final_estimate = isam->calculateEstimate();
-
-    //initial_estimate.print("input:");
-    //final_estimate.print("output:");
 
     ROS_INFO("loop closure with %d and %d", start_key, loop_key);
 

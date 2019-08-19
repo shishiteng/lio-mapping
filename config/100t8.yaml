@@ -46,7 +46,7 @@ plane_projection_factor: 0
 imu_factor: 1
 point_distance_factor: 1
 
-prior_factor: 1
+prior_factor: 0
 
 marginalization_factor: 1
 

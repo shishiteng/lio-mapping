@@ -130,7 +130,9 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     Eigen::Matrix4d pose_start = GtsamToEigen(initial_estimate.at<gtsam::Pose3>(start_key));
     ROS_INFO("cloud size: %lu %lu", scan_start.points.size(), scan_end.points.size());
 
-    if (PerformICP(scan_start.makeShared(), scan_end.makeShared(), pose_start, delta))
+    // delta代表 从end到start的变换，以end为参考系
+    pose_start = Eigen::Matrix4d::Identity();
+    if (PerformICP(scan_end.makeShared(), scan_start.makeShared(), pose_start, delta))
     {
         ROS_INFO("-----SUCCESS------");
         ROS_INFO("found loop closure with %d and %d", loop_key, start_key);
@@ -273,7 +275,7 @@ bool LoopClosure::PerformICP(const PointCloud::Ptr reference, const PointCloud::
         T(1, 0), T(1, 1), T(1, 2), T(1, 3),
         T(2, 0), T(2, 1), T(2, 2), T(2, 3),
         0, 0, 0, 1;
-    delta = EigenToGtsam(trans.inverse());
+    delta = EigenToGtsam(trans);
     // Is the transform good?
     if (!icp.hasConverged())
     {

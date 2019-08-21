@@ -1,4 +1,5 @@
 #include "loop_closure.h"
+#include "tf/tf.h"
 
 using namespace gtsam;
 
@@ -14,12 +15,16 @@ bool LoopClosure::Initialize(const ros::NodeHandle &n)
 {
     ros::NodeHandle nl(n);
 
-    //sub_path_ = nl.subscribe("/vins_estimator/lidar_path", 100, &LoopClosure::PathCallback, this);
-    sub_path_ = nl.subscribe("/path_aft_mapped", 100, &LoopClosure::PathCallback, this);
+    std::string path_topic("/lio_map_builder/path_aft_mapped");
+
+    //sub_path_ = nl.subscribe("//blam/blam_slam/path", 100, &LoopClosure::PathCallback, this);
+    sub_path_ = nl.subscribe(path_topic, 100, &LoopClosure::PathCallback, this);
     sub_points_ = nl.subscribe("/rslidar_points", 1, &LoopClosure::PointCloudCallback, this);
 
     pub_path_loop_ = nl.advertise<nav_msgs::Path>("path_loop", 10, false);
+    pub_path_3dof_ = nl.advertise<nav_msgs::Path>("path_loop_3dof", 10, false);
     pub_octmap_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map", 1);
+    pub_octmap_3dof_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map_3dof", 1);
 
     timeshift_ = 0;
 
@@ -42,7 +47,7 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     gtsam::Values final_estimate;
     gtsam::Pose3 delta;
     unsigned int key = 0;
-    std::vector<ros::Time> timestamp_buff;
+    std::vector<double> timestamp_buff;
 
     ROS_INFO("ISAM2 INIT");
 
@@ -66,18 +71,16 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     gtsam::Values new_value;
     new_factor.add(PriorFactor<gtsam::Pose3>(key, init_pose, init_covariance));
     new_value.insert(key, init_pose);
+    key++;
 
     isam->update(new_factor, new_value);
     initial_estimate = isam->calculateEstimate();
 
-    timestamp_buff.push_back(path_.poses[0].header.stamp); //时间戳
-    key++;
+    timestamp_buff.push_back(path_.poses[0].header.stamp.toSec()); //时间戳
     ROS_INFO("ISAM2 add edges");
 
     // 2.ISAM2 add edges
     gtsam::noiseModel::Diagonal::shared_ptr prior_model(gtsam::noiseModel::Diagonal::Sigmas(noise));
-
-    // isam edges
     for (int i = 1; i < pose_size; i++)
     {
         gtsam::Pose3 curr_pose = RosToGtsam(path_.poses[i].pose);
@@ -104,150 +107,173 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         isam->update(new_factor2, new_value2);
         initial_estimate = isam->calculateEstimate();
 
-        timestamp_buff.push_back(path_.poses[i].header.stamp); //时间戳
+        timestamp_buff.push_back(path_.poses[i].header.stamp.toSec()); //时间戳
         key++;
     }
 
     ROS_INFO("ISAM2 correct loop");
-#if 0
-    gu::Transform3 delta;
-    if (PerformICP(scan_curr, scan_start, pose_start, pose_start, &delta)) //这里以start frame为参考帧，一定注意
-    {
-        ROS_INFO("-----SUCCESS------");
-        ROS_INFO("found loop closure with %d and %d", curr_key, start_key);
-
-        // We found a loop closure. Add it to the pose graph.
-        NonlinearFactorGraph new_factor;
-        new_factor.add(BetweenFactor<gtsam::Pose3>(curr_key, start_key, ToGtsam(delta), ToGtsam(covariance)));
-        isam_->update(new_factor, Values());
-        closed_loop = true;
-        last_closure_key_ = curr_key;
-
-        // Store for visualization and output.
-        loop_edges_.push_back(std::make_pair(key, start_key));
-        closure_keys->push_back(start_key);
-
-        // Send an empty message notifying any subscribers that we found a loop closure.
-        loop_closure_notifier_pub_.publish(std_msgs::Empty());
-
-        //values_.print("prev_loop values:");
-        values_ = isam_->calculateEstimate();
-        //values_.print("after_loop values:");
-
-        ROS_DEBUG(" CorrectLoop: %d", curr_key);
-    }
-    else
-        ROS_INFO("-----FAILED------");
-#endif
 
     // 3.ISAM2 loop closure
-    //gtsam::noiseModel::Diagonal::shared_ptr loop_model(gtsam::noiseModel::Diagonal::Sigmas(noise));
+    // 4.TODO:ICP求解delta
     unsigned int start_key = 0;
     unsigned int loop_key = key - 1;
-    gtsam::Pose3 start_pose = initial_estimate.at<gtsam::Pose3>(start_key); //RosToGtsam(path_.poses[0].pose);
-    gtsam::Pose3 loop_pose = initial_estimate.at<gtsam::Pose3>(loop_key);   //RosToGtsam(path_.poses[pose_size - 1].pose);
-    delta = loop_pose.between(loop_pose);
+    PointCloud scan_start;
+    PointCloud scan_end;
+    if (!(FindPointCloud(timestamp_buff[key - 1], scan_end) && FindPointCloud(timestamp_buff[0], scan_start)))
+    {
+        ROS_ERROR("can't find scans: %lf %lf", timestamp_buff[0], timestamp_buff[key - 1]);
+        return;
+    }
 
-    // TODO:ICP求解delta
+    gtsam::Pose3 start_pose = initial_estimate.at<gtsam::Pose3>(start_key);
+    //gtsam::Pose3 loop_pose = initial_estimate.at<gtsam::Pose3>(loop_key);
+    Eigen::Matrix4d pose_start = GtsamToEigen(initial_estimate.at<gtsam::Pose3>(start_key));
+    ROS_INFO("cloud size: %lu %lu", scan_start.points.size(), scan_end.points.size());
 
-    gtsam::NonlinearFactorGraph new_factor3;
-    new_factor3.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, prior_model));
-    isam->update(new_factor3, Values());
-    final_estimate = isam->calculateEstimate();
+    if (PerformICP(scan_start.makeShared(), scan_end.makeShared(), pose_start, delta))
+    {
+        ROS_INFO("-----SUCCESS------");
+        ROS_INFO("found loop closure with %d and %d", loop_key, start_key);
+        std::cout << "icp delta:" << delta;
 
+        // We found a loop closure. Add it to the pose graph.
+        NonlinearFactorGraph loop_factor;
+        loop_factor.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, init_covariance));
+        isam->update(loop_factor, Values());
+        final_estimate = isam->calculateEstimate();
+    }
+    else
+    {
+        ROS_WARN("-----FAILED------");
+        return;
+    }
+
+    // gtsam::NonlinearFactorGraph new_factor3;
+    // new_factor3.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, prior_model));
+    // isam->update(new_factor3, Values());
+    // final_estimate = isam->calculateEstimate();
     ROS_INFO("loop closure with %d and %d", start_key, loop_key);
 
-    // publish result
+    // 5.
+    ROS_INFO("publish result");
+    PublishResult(final_estimate, timestamp_buff);
+
+    // 6.generate map
+    ROS_INFO("generate new map");
+    GenerateMap();
+
+    ROS_INFO("generate 3dof map");
+    Generate3DofMap();
+}
+
+bool LoopClosure::FindPointCloud(double timestamp, PointCloud &cloud)
+{
+    uint64_t t = (uint64_t)(timestamp * 1000000.f);
+    //ROS_INFO("FindPointCloud: %lf %ld in [%lu]", timestamp, t, points_buf_.size());
+
+    for (auto &scan : points_buf_)
+    {
+        //fprintf(stderr, "%ld %ld \n", t, scan.header.stamp);
+        if (scan.header.stamp == t)
+        {
+            copyPointCloud(scan, cloud);
+            return true;
+        }
+    }
+    ROS_WARN("can't find pointcloud: %lf", timestamp);
+    return false;
+}
+
+void LoopClosure::PublishResult(gtsam::Values final_estimate, std::vector<double> timestamp_buff)
+{
+    //1.原path
+    //pub_path_.publish(path_);
+
+    //2.loop path
     nav_msgs::Path loop_path;
     loop_path.header = path_.header;
     int n = 0;
     for (const auto &keyed_pose : final_estimate)
     {
         geometry_msgs::PoseStamped pose_stamped;
-        pose_stamped.header.stamp = timestamp_buff[n++]; //时间戳
+        ros::Time t(timestamp_buff[n++]);
+        pose_stamped.header.stamp = t; //时间戳
         pose_stamped.pose = GtsamToRos(final_estimate.at<gtsam::Pose3>(keyed_pose.key));
         loop_path.poses.push_back(pose_stamped);
     }
     pub_path_loop_.publish(loop_path);
 
     // 更新path，用于多次优化
-    path_ = loop_path;
+    // path_ = loop_path;
+    path_loop_ = loop_path;
 
-    ROS_INFO("publish result");
+    //3.3dof loop path
+    nav_msgs::Path path_3dof;
+    path_3dof.header = path_.header;
+    n = 0;
+    for (const auto &keyed_pose : final_estimate)
+    {
+        geometry_msgs::PoseStamped pose_stamped;
+        ros::Time t(timestamp_buff[n++]);
+        pose_stamped.header.stamp = t; //时间戳
+        // 平面假设：roll pitch z 置为0
+        Eigen::Matrix4d trans = GtsamToEigen(final_estimate.at<gtsam::Pose3>(keyed_pose.key));
+        tf::Matrix3x3 mat(trans(0, 0), trans(0, 1), trans(0, 2),
+                          trans(1, 0), trans(1, 1), trans(1, 2),
+                          trans(2, 0), trans(2, 1), trans(2, 2));
+        tfScalar yaw, pitch, roll;
+        mat.getEulerYPR(yaw, pitch, roll);
+        mat.setEulerYPR(yaw, 0, 0);
+        Eigen::Matrix4d trans_new;
+        trans_new << mat[0][0], mat[0][1], mat[0][2], trans(0, 3),
+            mat[1][0], mat[1][1], mat[1][2], trans(1, 3),
+            mat[2][0], mat[2][1], mat[2][2], 0,
+            0, 0, 0, 1;
+
+        pose_stamped.pose = EigenToRos(trans_new);
+        path_3dof.poses.push_back(pose_stamped);
+    }
+    pub_path_3dof_.publish(path_3dof);
+    path_3dof_ = path_3dof;
 }
 
-#if 0
-bool LoopClosure::PerformICP(const PointCloud::ConstPtr &scan1,
-                             const PointCloud::ConstPtr &scan2,
-                             const gu::Transform3 &pose1,
-                             const gu::Transform3 &pose2,
-                             gu::Transform3 *delta)
+bool LoopClosure::PerformICP(const PointCloud::Ptr reference, const PointCloud::Ptr query, const Eigen::Matrix4d &pose0, gtsam::Pose3 &delta)
 {
-    if (delta == NULL)
-    {
-        ROS_ERROR("%s: Output pointers are null.", name_.c_str());
-        return false;
-    }
+    ROS_INFO("PerformICP %lf %lf", (double)reference->header.stamp / 1000000.f, (double)query->header.stamp / 1000000.f);
+
+    std::cout << "pose0:\n"
+              << pose0 << std::endl;
 
     // Set up ICP.
     pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-    icp.setTransformationEpsilon(icp_tf_epsilon_);
-    icp.setMaxCorrespondenceDistance(icp_corr_dist_);
-    icp.setMaximumIterations(icp_iterations_);
+    icp.setTransformationEpsilon(1e-10);
+    icp.setMaxCorrespondenceDistance(1.0);
+    icp.setMaximumIterations(100);
     icp.setRANSACIterations(0);
 
-    // Filter the two scans. They are stored in the pose graph as dense scans for
-    // visualization.
-    PointCloud::Ptr scan1_filtered(new PointCloud);
-    PointCloud::Ptr scan2_filtered(new PointCloud);
-
-    //降采样会降低icp匹配精度，降采样前score 0.24,降采样后0.9
-    //filter_.Filter(scan1, scan1_filtered);
-    //filter_.Filter(scan2, scan2_filtered);
-    filter_.AngleFilter(scan1, scan1_filtered);
-    filter_.AngleFilter(scan2, scan2_filtered);
-
-#if 1
-    pcl::io::savePCDFileASCII("1.pcd", *scan1);
-    pcl::io::savePCDFileASCII("2.pcd", *scan2);
-    pcl::io::savePCDFileASCII("1filt.pcd", *scan1_filtered);
-    pcl::io::savePCDFileASCII("2filt.pcd", *scan2_filtered);
-#endif
-
-    // Set source point cloud. Transform it to pose 2 frame to get a delta.
-    const Eigen::Matrix<double, 3, 3> R1 = pose1.rotation.Eigen();
-    const Eigen::Matrix<double, 3, 1> t1 = pose1.translation.Eigen();
-    Eigen::Matrix4d body1_to_world;
-    body1_to_world.block(0, 0, 3, 3) = R1;
-    body1_to_world.block(0, 3, 3, 1) = t1;
-
-    const Eigen::Matrix<double, 3, 3> R2 = pose2.rotation.Eigen();
-    const Eigen::Matrix<double, 3, 1> t2 = pose2.translation.Eigen();
-    Eigen::Matrix4d body2_to_world;
-    body2_to_world.block(0, 0, 3, 3) = R2;
-    body2_to_world.block(0, 3, 3, 1) = t2;
-
     PointCloud::Ptr source(new PointCloud);
-    pcl::transformPointCloud(*scan1_filtered, *source, body1_to_world);
+    pcl::transformPointCloud(*query, *source, pose0);
     icp.setInputSource(source);
 
     // Set target point cloud in its own frame.
     PointCloud::Ptr target(new PointCloud);
-    pcl::transformPointCloud(*scan2_filtered, *target, body2_to_world);
+    pcl::transformPointCloud(*reference, *target, pose0);
     icp.setInputTarget(target);
 
     // Perform ICP.
-    PointCloud unused_result;
-    icp.align(unused_result);
+    PointCloud::Ptr unused_result(new PointCloud);
+    //PointCloud unused_result;
+    icp.align(*unused_result);
 
-    // Get resulting transform.
+    // Get resulting transform: 1 to 2 in 2
+    // frome query to reference in reference
     const Eigen::Matrix4f T = icp.getFinalTransformation();
-    gu::Transform3 delta_icp;
-    delta_icp.translation = gu::Vec3(T(0, 3), T(1, 3), T(2, 3));
-    delta_icp.rotation = gu::Rot3(T(0, 0), T(0, 1), T(0, 2),
-                                  T(1, 0), T(1, 1), T(1, 2),
-                                  T(2, 0), T(2, 1), T(2, 2));
-
+    Eigen::Matrix4d trans;
+    trans << T(0, 0), T(0, 1), T(0, 2), T(0, 3),
+        T(1, 0), T(1, 1), T(1, 2), T(1, 3),
+        T(2, 0), T(2, 1), T(2, 2), T(2, 3),
+        0, 0, 0, 1;
+    delta = EigenToGtsam(trans.inverse());
     // Is the transform good?
     if (!icp.hasConverged())
     {
@@ -255,107 +281,80 @@ bool LoopClosure::PerformICP(const PointCloud::ConstPtr &scan1,
         return false;
     }
 
-    //if (icp.getFitnessScore() < 1)
-    {
-        ROS_INFO("icp score:%f", icp.getFitnessScore());
-    }
-
+    ROS_INFO("icp score:%f", icp.getFitnessScore());
     if (icp.getFitnessScore() > 5.0)
     {
-        ROS_INFO("icp score is larger than tolerable:%f > %f",
-                 icp.getFitnessScore(),
-                 max_tolerable_fitness_);
-        return false;
+        ROS_INFO("icp score is larger than 5: %f", icp.getFitnessScore());
+        //return false;
     }
+    std::cout << "delta:" << delta << std::endl;
 
-    // Update the pose-to-pose odometry estimate using the output of ICP.
-    const gu::Transform3 update =
-        gu::PoseUpdate(gu::PoseInverse(pose1),
-                       gu::PoseUpdate(gu::PoseInverse(delta_icp), pose1));
-
-    *delta = gu::PoseUpdate(update, gu::PoseDelta(pose1, pose2));
-
-    {
-        ros::Time t1, t2;
-        t1 = t1.fromNSec(scan1->header.stamp * 1000ull); // Convert from us to ns;
-        t2 = t2.fromNSec(scan2->header.stamp * 1000ull);
-        printf("timestamp:[%f,%f]\n", t1.toSec(), t2.toSec());
-        std::cout << "icp_deltaT:\n"
-                  << *delta << std::endl;
-    }
+#if 1
+    pcl::io::savePCDFileASCII("query.pcd", *query);
+    pcl::io::savePCDFileASCII("reference.pcd", *reference);
+    pcl::io::savePCDFileASCII("source.pcd", *source);
+    pcl::io::savePCDFileASCII("target.pcd", *target);
+#endif
 
     return true;
 }
-#endif
 
-// 根据时间戳
-void LoopClosure::GenerateNewMap(PointCloud *points,
-                                 std::vector<geometry_msgs::PoseStamped> poses,
-                                 std::vector<PointCloud> scans)
+void LoopClosure::PathCallback(const nav_msgs::Path::ConstPtr &msg)
 {
-    if (points == NULL)
-    {
-        ROS_ERROR("Output point cloud container is null.");
-        return;
-    }
-    points->points.clear();
+    path_ = *msg;
+}
+
+void LoopClosure::PointCloudCallback(const PointCloud::ConstPtr &msg)
+{
+    PointCloud::Ptr laserCloudWithoutNaN(new PointCloud());
+    std::vector<int> indices;
+    pcl::removeNaNFromPointCloud(*msg, *laserCloudWithoutNaN, indices);
+
+    PointCloud::Ptr msg_filtered(new PointCloud);
+    FiltPoints(laserCloudWithoutNaN, msg_filtered);
+    points_buf_.push_back(*msg_filtered);
+}
+
+void LoopClosure::GenerateMap()
+{
+    ROS_INFO("GenerateMap");
 
     // Initialize the map octree.
+    PointCloud::Ptr regenerated_map(new PointCloud);
     PointCloud::Ptr map_data;
     map_data.reset(new PointCloud);
     map_data->header.frame_id = "world";
     pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>::Ptr map_octree;
-    map_octree.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>(0.05)); //octree_resolution:0.05
+    map_octree.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>(0.02)); //octree_resolution:0.05
     map_octree->setInputCloud(map_data);
 
-    int n_pose = poses.size();
-    int n_scan = scans.size();
-    printf(" pose count: %d\n", n_pose);
-    printf(" scan count: %d\n", n_scan);
-
-    // camera和lidar不在同一个时钟下，这里通过第一帧的时间粗略做个转换
-    double pose_start = poses[0].header.stamp.toSec();
-    double pose_end = poses[n_pose - 1].header.stamp.toSec();
-    //double pose_period = (pose_end - pose_start) / n_pose;
-    //double pose_period = 0.05; //pose周期:20ms
-
-    double scan_start = (double)scans[0].header.stamp / 1000000.f;
-    double scan_end = (double)scans[n_scan - 1].header.stamp / 1000000.f;
-
-    printf(" pose count: %d [%.3f %.3f]\n", n_pose, pose_start, pose_end);
-    printf(" scan count: %d [%.3f %.3f]\n", n_scan, scan_start, scan_end);
-
-    // We found one - regenerate the 3D map.
-    PointCloud::Ptr regenerated_map(new PointCloud);
-    //loop_closure_.GetMaximumLikelihoodPoints(regenerated_map.get());
-
-    for (unsigned int i = 0; i < scans.size() - 1; i++)
+    for (const auto &pose_stamped : path_loop_.poses)
     {
-        double t0 = (double)scans[i].header.stamp / 1000000.f;
-        double t1 = (double)scans[i + 1].header.stamp / 1000000.f;
-
-        for (const auto &pose_stamped : poses)
+        bool find_scan = false;
+        uint64_t t = (uint64_t)(pose_stamped.header.stamp.toSec() * 1000000.f);
+        PointCloud::Ptr scan_filtered(new PointCloud);
+        for (auto &scan : points_buf_)
         {
-            double t = pose_stamped.header.stamp.toSec() + timeshift_;
-            if (t >= t0 && t < t1)
+            // printf("%lf -----> %lf\n", (double)scan.header.stamp / 1000000.f, t);
+            if (scan.header.stamp == t)
             {
-                // pose需要插值，但是这里暂时先不做
-                Eigen::Matrix4d b2w = PosestampedToEigen(pose_stamped);
-
-                PointCloud scan_filtered;
-                scan_filtered = scans[i];
-                //FiltPoints(scans[i], scan_filtered);
-
-                PointCloud scan_world;
-                pcl::transformPointCloud(scan_filtered, scan_world, b2w);
-                // scan_world.header.frame_id = "world";
-                // pub_laser.publish(scan_world);
-
-                *regenerated_map += scan_world;
+                *scan_filtered = scan;
+                find_scan = true;
                 break;
             }
         }
+        if (!find_scan)
+            continue;
+
+        PointCloud::Ptr scan_world(new PointCloud);
+        Eigen::Matrix4d b2w = PosestampedToEigen(pose_stamped);
+        pcl::transformPointCloud(*scan_filtered, *scan_world, b2w);
+        *regenerated_map += *scan_world;
     }
+
+    ROS_INFO("regenerated map points: %lu", regenerated_map->points.size());
+    if (regenerated_map->points.size() == 0)
+        return;
 
     // oct tree
     for (size_t ii = 0; ii < regenerated_map->points.size(); ii++)
@@ -366,23 +365,137 @@ void LoopClosure::GenerateNewMap(PointCloud *points,
     }
 
     // publish result
-    //pub_map.publish(*points);
+    ROS_INFO("octomap points: %lu", map_data->points.size());
     pub_octmap_.publish(map_data);
-    pcl::io::savePCDFileASCII("mymap.pcd", *map_data);
+
+    // save
+    ROS_INFO("save map");
+    pcl::io::savePCDFileASCII("map_loop.pcd", *map_data);
 
     // release pcl buffer
     map_data->clear();
     map_octree.reset();
 }
 
-void LoopClosure::PathCallback(const nav_msgs::Path::ConstPtr &msg)
+void LoopClosure::Generate3DofMap()
 {
-    path_ = *msg;
+    ROS_INFO("Generate3DofMap");
+
+    // Initialize the map octree.
+    PointCloud::Ptr regenerated_map(new PointCloud);
+    PointCloud::Ptr map_data;
+    map_data.reset(new PointCloud);
+    map_data->header.frame_id = "world";
+    pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>::Ptr map_octree;
+    map_octree.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>(0.02)); //octree_resolution:0.05
+    map_octree->setInputCloud(map_data);
+
+    for (const auto &pose_stamped : path_3dof_.poses)
+    {
+        bool find_scan = false;
+        uint64_t t = (uint64_t)(pose_stamped.header.stamp.toSec() * 1000000.f);
+        PointCloud::Ptr scan_filtered(new PointCloud);
+        for (auto &scan : points_buf_)
+        {
+            if (scan.header.stamp == t)
+            {
+                *scan_filtered = scan;
+                find_scan = true;
+                break;
+            }
+        }
+        if (!find_scan)
+            continue;
+
+        PointCloud::Ptr scan_world(new PointCloud);
+        Eigen::Matrix4d b2w = PosestampedToEigen(pose_stamped);
+        pcl::transformPointCloud(*scan_filtered, *scan_world, b2w);
+        *regenerated_map += *scan_world;
+    }
+
+    ROS_INFO("points: %lu", regenerated_map->points.size());
+    if (regenerated_map->points.size() == 0)
+        return;
+
+    // oct tree
+    for (size_t ii = 0; ii < regenerated_map->points.size(); ii++)
+    {
+        const pcl::PointXYZ p = regenerated_map->points[ii];
+        if (!map_octree->isVoxelOccupiedAtPoint(p))
+            map_octree->addPointToCloud(p, map_data);
+    }
+
+    // publish result
+    pub_octmap_3dof_.publish(map_data);
+
+    // save
+    ROS_INFO("save map");
+    pcl::io::savePCDFileASCII("map_3dof.pcd", *map_data);
+
+    // release pcl buffer
+    map_data->clear();
+    map_octree.reset();
 }
 
-void LoopClosure::PointCloudCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
+void LoopClosure::FiltPoints(const PointCloud::ConstPtr &points, PointCloud::Ptr points_filtered)
 {
-    //points_buf.push_back(*msg);
+    // Copy input points.
+    *points_filtered = *points;
+
+    bool random_filter = true;
+    double decimate_percentage = 0.7;
+    if (random_filter)
+    {
+        const int n_points = static_cast<int>((1.0 - decimate_percentage) * points_filtered->size());
+        pcl::RandomSample<pcl::PointXYZ> random_filter;
+        random_filter.setSample(n_points);
+        random_filter.setInputCloud(points_filtered);
+        random_filter.filter(*points_filtered);
+    }
+
+    // Apply a voxel grid filter to the incoming point cloud.
+    bool grid_filter = false;
+    double grid_res = 0.05;
+    if (grid_filter)
+    {
+        pcl::VoxelGrid<pcl::PointXYZ> grid;
+        grid.setLeafSize(grid_res, grid_res, 0.0);
+        grid.setInputCloud(points_filtered);
+        grid.filter(*points_filtered);
+    }
+
+    bool angle_filter = true;
+    if (angle_filter)
+    {
+        PointCloud::Ptr msg_filtered(new PointCloud);
+        AngleFilter(points_filtered, msg_filtered);
+        *points_filtered = *msg_filtered;
+    }
+}
+
+void LoopClosure::AngleFilter(const PointCloud::ConstPtr &points, PointCloud::Ptr points_filtered)
+{
+    if (points_filtered == NULL)
+    {
+        return;
+    }
+
+    points_filtered->header = points->header;
+    points_filtered->height = points->height;
+    for (unsigned int i = 0; i < points->points.size(); i++)
+    {
+        pcl::PointXYZ point = points->points[i];
+
+        // if (point.z < -0.6)
+        //   continue;
+
+        double theta = atan(point.y / (point.x == 0 ? 1e-5 : point.x)) * 180.f / 3.141592653;
+        if (point.x < 0 && theta > -45 && theta < 45)
+            continue;
+
+        points_filtered->points.push_back(point);
+        ++points_filtered->width;
+    }
 }
 
 Pose3 LoopClosure::RosToGtsam(geometry_msgs::Pose pose)
@@ -404,6 +517,12 @@ Pose3 LoopClosure::RosToGtsam(geometry_msgs::Pose pose)
            m(2, 0), m(2, 1), m(2, 2));
 
     return Pose3(r, t);
+}
+
+gtsam::Pose3 LoopClosure::EigenToGtsam(Eigen::Matrix4d transform)
+{
+    geometry_msgs::Pose pose = EigenToRos(transform);
+    return RosToGtsam(pose);
 }
 
 geometry_msgs::Pose LoopClosure::GtsamToRos(Pose3 pose)
@@ -443,7 +562,7 @@ geometry_msgs::Pose LoopClosure::EigenToRos(Eigen::Matrix4d transform)
 
 Eigen::Matrix4d LoopClosure::GtsamToEigen(Pose3 pose)
 {
-    Eigen::Matrix4d m;
+    Eigen::Matrix4d m = Eigen::Matrix4d::Identity();
 
     gtsam::Quaternion q0 = pose.rotation().toQuaternion();
     Eigen::Quaterniond q(q0.w(), q0.x(), q0.y(), q0.z());
@@ -473,26 +592,4 @@ Eigen::Matrix4d LoopClosure::PosestampedToEigen(geometry_msgs::PoseStamped pose_
     m.block(0, 3, 3, 1) = t;
 
     return m;
-}
-
-void LoopClosure::FiltPoints(PointCloud points_input,
-                             PointCloud &points_filtered)
-{
-    points_filtered.header = points_input.header;
-    points_filtered.height = points_input.height;
-
-    for (auto &p : points_input.points)
-    {
-        // 上下边界
-        // if (p.z > top_bound_ || p.z < down_bound_)
-        //     continue;
-
-        // 角度范围
-        double theta = atan(p.y / (p.x == 0 ? 1e-5 : p.x)) * 180.f / 3.14;
-        if (p.x < 0 && theta > -45 && theta < 45)
-            continue;
-
-        points_filtered.points.push_back(p);
-        ++points_filtered.width;
-    }
 }

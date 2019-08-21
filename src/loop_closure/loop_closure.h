@@ -44,32 +44,44 @@ public:
 private:
   // Sensor callbacks.
   void PathCallback(const nav_msgs::Path::ConstPtr &msg);
-  void PointCloudCallback(const sensor_msgs::PointCloud2::ConstPtr &msg);
+  void PointCloudCallback(const PointCloud::ConstPtr &msg);
 
   gtsam::Pose3 RosToGtsam(geometry_msgs::Pose pose);
+  gtsam::Pose3 EigenToGtsam(Eigen::Matrix4d transform);
   geometry_msgs::Pose EigenToRos(Eigen::Matrix4d transform);
   geometry_msgs::Pose GtsamToRos(gtsam::Pose3 pose);
   Eigen::Matrix4d GtsamToEigen(gtsam::Pose3 pose);
   Eigen::Matrix4d PosestampedToEigen(geometry_msgs::PoseStamped pose_stamped);
 
-  void GenerateNewMap(PointCloud *points,
-                      std::vector<geometry_msgs::PoseStamped> poses,
-                      std::vector<PointCloud> scans);
+  void AngleFilter(const PointCloud::ConstPtr &points, PointCloud::Ptr points_filtered);
+  void FiltPoints(const PointCloud::ConstPtr &points, PointCloud::Ptr points_filtered);
+  bool FindPointCloud(double timestamp, PointCloud &cloud);
 
-  void FiltPoints(PointCloud points_input, PointCloud &points_filtered);
+  bool PerformICP(const PointCloud::Ptr reference, const PointCloud::Ptr query, const Eigen::Matrix4d &pose0, gtsam::Pose3 &delta);
+
+  void GenerateMap();
+  void Generate3DofMap();
+
+  void PublishResult(gtsam::Values final_estimate, std::vector<double> timestamp_buff);
 
   // The node's name.
   nav_msgs::Path path_;
+  nav_msgs::Path path_loop_;
+  nav_msgs::Path path_3dof_;
 
   // Subscribers.
   ros::Subscriber sub_path_;
   ros::Subscriber sub_points_;
 
   // Publishers
+  ros::Publisher pub_path_;
   ros::Publisher pub_path_loop_;
+  ros::Publisher pub_path_3dof_;
   ros::Publisher pub_octmap_;
+  ros::Publisher pub_octmap_3dof_;
 
   double timeshift_;
+  std::vector<PointCloud> points_buf_;
 };
 
 #endif

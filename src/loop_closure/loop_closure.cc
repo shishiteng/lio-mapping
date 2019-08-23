@@ -16,13 +16,13 @@ bool LoopClosure::Initialize(const ros::NodeHandle &n)
     ros::NodeHandle nl(n);
 
     std::string path_topic("/lio_map_builder/path_aft_mapped");
+    path_topic = "/blam/blam_slam/path";
 
-    //sub_path_ = nl.subscribe("//blam/blam_slam/path", 100, &LoopClosure::PathCallback, this);
-    sub_path_ = nl.subscribe(path_topic, 100, &LoopClosure::PathCallback, this);
+    sub_path_ = nl.subscribe(path_topic, 1, &LoopClosure::PathCallback, this);
     sub_points_ = nl.subscribe("/rslidar_points", 1, &LoopClosure::PointCloudCallback, this);
 
-    pub_path_loop_ = nl.advertise<nav_msgs::Path>("path_loop", 10, false);
-    pub_path_3dof_ = nl.advertise<nav_msgs::Path>("path_loop_3dof", 10, false);
+    pub_path_loop_ = nl.advertise<nav_msgs::Path>("path_loop", 1, false);
+    pub_path_3dof_ = nl.advertise<nav_msgs::Path>("path_loop_3dof", 1, false);
     pub_octmap_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map", 1);
     pub_octmap_3dof_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map_3dof", 1);
 
@@ -42,79 +42,54 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         return;
     }
 
-    std::unique_ptr<gtsam::ISAM2> isam;
     gtsam::Values initial_estimate;
     gtsam::Values final_estimate;
     gtsam::Pose3 delta;
-    unsigned int key = 0;
+    gtsam::Key key = 0;
     std::vector<double> timestamp_buff;
 
-    ROS_INFO("ISAM2 INIT");
-
-    // 1. ISAM2 INIT
-    // isam initialize
-    gtsam::ISAM2Params parameters;
-    parameters.relinearizeSkip = 1;
-    parameters.relinearizeThreshold = 0.01;
-    isam.reset(new ISAM2(parameters));
-
-    // Set the covariance on initial position.
-    double sigma_x = 0.01, sigma_y = 0.01, sigma_z = 0.01;
+    double sigma_x = 0.02, sigma_y = 0.02, sigma_z = 0.02;
     double sigma_roll = 0.004, sigma_pitch = 0.004, sigma_yaw = 0.004;
     gtsam::Vector6 noise;
     noise << sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw;
     gtsam::Pose3 init_pose = RosToGtsam(path_.poses[0].pose);
-    gtsam::noiseModel::Diagonal::shared_ptr init_covariance(gtsam::noiseModel::Diagonal::Sigmas(noise));
+    gtsam::noiseModel::Diagonal::shared_ptr prior_model(gtsam::noiseModel::Diagonal::Sigmas(noise));
 
-    // Initialize ISAM2.
-    gtsam::NonlinearFactorGraph new_factor;
-    gtsam::Values new_value;
-    new_factor.add(PriorFactor<gtsam::Pose3>(key, init_pose, init_covariance));
-    new_value.insert(key, init_pose);
+    // 1.Add a prior on the first pose
+    gtsam::NonlinearFactorGraph graph;
+    graph.add(PriorFactor<gtsam::Pose3>(key, init_pose, prior_model));
+    initial_estimate.insert(key, init_pose);
     key++;
-
-    isam->update(new_factor, new_value);
-    initial_estimate = isam->calculateEstimate();
 
     timestamp_buff.push_back(path_.poses[0].header.stamp.toSec()); //时间戳
     ROS_INFO("ISAM2 add edges");
 
-    // 2.ISAM2 add edges
-    gtsam::noiseModel::Diagonal::shared_ptr prior_model(gtsam::noiseModel::Diagonal::Sigmas(noise));
+    // 2.Add odometry factors
+    gtsam::noiseModel::Diagonal::shared_ptr odom_model(gtsam::noiseModel::Diagonal::Sigmas(noise));
     for (int i = 1; i < pose_size; i++)
     {
         gtsam::Pose3 curr_pose = RosToGtsam(path_.poses[i].pose);
-        gtsam::Pose3 last_pose = initial_estimate.at<gtsam::Pose3>(key - 1);
-        delta = curr_pose.between(last_pose).inverse(); //这里，很重要 [delta=(last-new).inv，也就是new to last]
+        gtsam::Pose3 last_pose = initial_estimate.at<gtsam::Pose3>(key - 1); //XXXXXXXXXXXXXXXXXXXXX!!!!!!!!!!!!!!!!!!!! initial_value没有啦！
+        delta = curr_pose.between(last_pose).inverse();                      //这里，很重要 [delta=(last-new).inv，也就是new to last]
 
-        double norm = sqrt(pow(curr_pose.translation().x() - last_pose.translation().x(), 2) +
-                           pow(curr_pose.translation().y() - last_pose.translation().y(), 2) +
-                           pow(curr_pose.translation().z() - last_pose.translation().z(), 2));
-        double angle = acos(delta.rotation().toQuaternion().w()) * 2.f * 57.3f;
+        double norm = delta.translation().norm();;
+        double angle = fabs(acos(delta.rotation().toQuaternion().w()) * 2.f * 57.3f);
 
         // 直线距离大于1m，旋转角超过5度的帧加入关键帧，最后一帧也加入
         if (!((norm > 1 || angle > 5) && i < pose_size - 1))
             continue;
-
+            
         // add factor
-        gtsam::NonlinearFactorGraph new_factor2;
-        new_factor2.add(BetweenFactor<gtsam::Pose3>(key - 1, key, delta, prior_model));
-
-        gtsam::Values new_value2;
-        new_value2.insert(key, curr_pose);
-
-        // Update ISAM2.
-        isam->update(new_factor2, new_value2);
-        initial_estimate = isam->calculateEstimate();
-
-        timestamp_buff.push_back(path_.poses[i].header.stamp.toSec()); //时间戳
+        graph.add(BetweenFactor<gtsam::Pose3>(key - 1, key, delta, odom_model));
+        initial_estimate.insert(key, curr_pose);
         key++;
+
+        timestamp_buff.push_back(path_.poses[i].header.stamp.toSec()); //时间戳   
     }
 
     ROS_INFO("ISAM2 correct loop");
 
-    // 3.ISAM2 loop closure
-    // 4.TODO:ICP求解delta
+    // 3.Add the loop closure constraint
     unsigned int start_key = 0;
     unsigned int loop_key = key - 1;
     PointCloud scan_start;
@@ -126,7 +101,6 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     }
 
     gtsam::Pose3 start_pose = initial_estimate.at<gtsam::Pose3>(start_key);
-    //gtsam::Pose3 loop_pose = initial_estimate.at<gtsam::Pose3>(loop_key);
     Eigen::Matrix4d pose_start = GtsamToEigen(initial_estimate.at<gtsam::Pose3>(start_key));
     ROS_INFO("cloud size: %lu %lu", scan_start.points.size(), scan_end.points.size());
 
@@ -138,11 +112,14 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         ROS_INFO("found loop closure with %d and %d", loop_key, start_key);
         std::cout << "icp delta:" << delta;
 
-        // We found a loop closure. Add it to the pose graph.
-        NonlinearFactorGraph loop_factor;
-        loop_factor.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, init_covariance));
-        isam->update(loop_factor, Values());
-        final_estimate = isam->calculateEstimate();
+        gtsam::Vector6 loop_noise;
+        loop_noise << 0, 0, 0, 0, 0, 0;
+        gtsam::noiseModel::Diagonal::shared_ptr loop_model(gtsam::noiseModel::Diagonal::Sigmas(loop_noise));
+        graph.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, loop_model));
+
+        gtsam::GaussNewtonParams parameters;
+        gtsam::GaussNewtonOptimizer optimizer(graph, initial_estimate, parameters);
+        final_estimate = optimizer.optimize();
     }
     else
     {
@@ -150,10 +127,7 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         return;
     }
 
-    // gtsam::NonlinearFactorGraph new_factor3;
-    // new_factor3.add(BetweenFactor<gtsam::Pose3>(loop_key, start_key, delta, prior_model));
-    // isam->update(new_factor3, Values());
-    // final_estimate = isam->calculateEstimate();
+ 
     ROS_INFO("loop closure with %d and %d", start_key, loop_key);
 
     // 5.
@@ -291,7 +265,7 @@ bool LoopClosure::PerformICP(const PointCloud::Ptr reference, const PointCloud::
     }
     std::cout << "delta:" << delta << std::endl;
 
-#if 1
+#if 0
     pcl::io::savePCDFileASCII("query.pcd", *query);
     pcl::io::savePCDFileASCII("reference.pcd", *reference);
     pcl::io::savePCDFileASCII("source.pcd", *source);
@@ -445,7 +419,7 @@ void LoopClosure::FiltPoints(const PointCloud::ConstPtr &points, PointCloud::Ptr
     *points_filtered = *points;
 
     bool random_filter = true;
-    double decimate_percentage = 0.7;
+    double decimate_percentage = 0.8;
     if (random_filter)
     {
         const int n_points = static_cast<int>((1.0 - decimate_percentage) * points_filtered->size());

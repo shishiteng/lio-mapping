@@ -16,18 +16,20 @@
 #include <pcl/filters/random_sample.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
-
 #include <pcl/octree/octree_search.h>
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Rot3.h>
-#include <gtsam/linear/NoiseModel.h>
-#include <gtsam/nonlinear/ISAM2.h>
+
+// class for factor graph, a container of various factors
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/nonlinear/GaussNewtonOptimizer.h>
+#include <gtsam/nonlinear/Marginals.h>
 
 typedef pcl::PointCloud<pcl::PointXYZ> PointCloud;
 

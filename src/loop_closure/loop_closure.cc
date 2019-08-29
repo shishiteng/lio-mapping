@@ -16,7 +16,7 @@ bool LoopClosure::Initialize(const ros::NodeHandle &n)
     ros::NodeHandle nl(n);
 
     std::string path_topic("/lio_map_builder/path_aft_mapped");
-    path_topic = "/blam/blam_slam/path";
+    //path_topic = "/blam/blam_slam/path";
 
     sub_path_ = nl.subscribe(path_topic, 1, &LoopClosure::PathCallback, this);
     sub_points_ = nl.subscribe("/rslidar_points", 1, &LoopClosure::PointCloudCallback, this);
@@ -78,7 +78,7 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         // 直线距离大于1m，旋转角超过5度的帧加入关键帧，最后一帧也加入
         if (!((norm > 1 || angle > 5) && i < pose_size - 1))
             continue;
-            
+
         // add factor
         graph.add(BetweenFactor<gtsam::Pose3>(key - 1, key, delta, odom_model));
         initial_estimate.insert(key, curr_pose);

@@ -153,7 +153,12 @@ add_executable(${PROJECT_NAME}_loopclosure_node
 target_link_libraries(${PROJECT_NAME}_loopclosure_node
   gtsam
   ${catkin_LIBRARIES}
-  )
+)
+
+# barometer test
+add_executable(barometer_test src/loop_closure/barometer_test.cc)
+target_link_libraries(barometer_test ${catkin_LIBRARIES})
+
 
 add_executable(${PROJECT_NAME}_processor_node src/processor_node.cc)
 add_dependencies(${PROJECT_NAME}_processor_node ${PROJECT_NAME}-point-processor)

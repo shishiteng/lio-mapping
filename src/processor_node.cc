@@ -47,14 +47,13 @@ using namespace lio;
 using namespace std;
 using namespace mathutils;
 
-
-int main(int argc, char **argv) {
-
+int main(int argc, char **argv)
+{
   google::InitGoogleLogging(argv[0]);
   FLAGS_alsologtostderr = true;
   ros::init(argc, argv, "point_processor");
-
   ros::NodeHandle nh("~");
+  //ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
 
   int sensor_type;
   double rad_diff;
@@ -65,11 +64,16 @@ int main(int argc, char **argv) {
 
   PointProcessor processor; // Default sensor_type is 16
 
-  if (sensor_type == 32) {
+  if (sensor_type == 32)
+  {
     processor = PointProcessor(-30.67f, 10.67f, 32);
-  } else if (sensor_type == 64) {
+  }
+  else if (sensor_type == 64)
+  {
     processor = PointProcessor(-24.9f, 2, 64);
-  } else if (sensor_type == 320) {
+  }
+  else if (sensor_type == 320)
+  {
     processor = PointProcessor(-25, 15, 32, true);
   }
 
@@ -83,7 +87,8 @@ int main(int argc, char **argv) {
   processor.SetupRos(nh);
 
   ros::Rate r(100);
-  while (ros::ok()) {
+  while (ros::ok())
+  {
     ros::spinOnce();
     r.sleep();
   }

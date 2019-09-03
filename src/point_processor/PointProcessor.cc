@@ -116,6 +116,20 @@ void PointProcessor::PointCloudHandler(const sensor_msgs::PointCloud2ConstPtr &r
   {
     PointCloud laser_cloud_in;
     pcl::fromROSMsg(*raw_points_msg, laser_cloud_in);
+
+    // 后方角过滤(置为INF)
+    for (unsigned int i = 0; i < laser_cloud_in.points.size(); i++)
+    {
+      PointT point = laser_cloud_in.points[i];
+      double theta = atan(point.y / (point.x == 0 ? 1e-5 : point.x)) * 180.f / 3.141592653;
+      if (point.x < 0 && theta > -45 && theta < 45)
+      {
+        laser_cloud_in.points[i].x = INFINITY;
+        laser_cloud_in.points[i].y = INFINITY;
+        laser_cloud_in.points[i].z = INFINITY;
+      }
+    }
+
     PointCloudConstPtr laser_cloud_in_ptr(new PointCloud(laser_cloud_in));
 
     SetInputCloud(laser_cloud_in_ptr, raw_points_msg->header.stamp);

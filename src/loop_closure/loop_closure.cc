@@ -223,7 +223,7 @@ bool LoopClosure::PerformICP(const PointCloud::Ptr reference, const PointCloud::
     // Set up ICP.
     pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
     icp.setTransformationEpsilon(1e-10);
-    icp.setMaxCorrespondenceDistance(1.0);
+    icp.setMaxCorrespondenceDistance(5.0);
     icp.setMaximumIterations(100);
     icp.setRANSACIterations(0);
 
@@ -265,7 +265,7 @@ bool LoopClosure::PerformICP(const PointCloud::Ptr reference, const PointCloud::
     }
     std::cout << "delta:" << delta << std::endl;
 
-#if 0
+#if 1
     pcl::io::savePCDFileASCII("query.pcd", *query);
     pcl::io::savePCDFileASCII("reference.pcd", *reference);
     pcl::io::savePCDFileASCII("source.pcd", *source);

@@ -2046,7 +2046,7 @@ void Estimator::SolveOptimization()
   //  options.linear_solver_type = ceres::DENSE_QR;
   //  options.num_threads = 8;
   options.trust_region_strategy_type = ceres::DOGLEG;
-  //  options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
+  // options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
   options.max_num_iterations = 10;
   //options.use_explicit_schur_complement = true;
   //options.minimizer_progress_to_stdout = true;
@@ -2132,6 +2132,8 @@ void Estimator::SolveOptimization()
   ceres::Solver::Summary summary;
   ceres::Solve(options, &problem, &summary);
   DLOG(INFO) << summary.BriefReport();
+  //std::cout << summary.FullReport() << std::endl;
+  std::cout << summary.BriefReport() << std::endl;
 
   ROS_DEBUG_STREAM("t_opt: " << t_opt.Toc() << " ms");
   DLOG(INFO) << "t_opt: " << t_opt.Toc() << " ms";
@@ -2172,6 +2174,7 @@ void Estimator::SolveOptimization()
 
   DoubleToVector();
 
+  // std::cout << transform_lb_ << std::endl;
   //  P_last = Ps_.last();
   //  if ((P_last - P_last0).norm() < 0.1) {
   //    convergence_flag_ = true;

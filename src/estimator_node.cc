@@ -176,6 +176,8 @@ void Run() {
 
 int main(int argc, char **argv) {
 
+  FLAGS_logtostderr = 1;  //输出到控制台
+
   google::InitGoogleLogging(argv[0]);
   google::ParseCommandLineFlags(&argc, &argv, true);
 

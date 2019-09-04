@@ -1,5 +1,6 @@
 #include "loop_closure.h"
 #include "tf/tf.h"
+#include "utility.h"
 
 using namespace gtsam;
 
@@ -23,6 +24,7 @@ bool LoopClosure::Initialize(const ros::NodeHandle &n)
 
     pub_path_loop_ = nl.advertise<nav_msgs::Path>("path_loop", 1, false);
     pub_path_3dof_ = nl.advertise<nav_msgs::Path>("path_loop_3dof", 1, false);
+    pub_path_4dof_ = nl.advertise<nav_msgs::Path>("path_loop_4dof", 1, false);
     pub_octmap_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map", 1);
     pub_octmap_3dof_ = nl.advertise<sensor_msgs::PointCloud2>("/oct_map_3dof", 1);
 
@@ -72,7 +74,7 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         gtsam::Pose3 last_pose = initial_estimate.at<gtsam::Pose3>(key - 1); //XXXXXXXXXXXXXXXXXXXXX!!!!!!!!!!!!!!!!!!!! initial_value没有啦！
         delta = curr_pose.between(last_pose).inverse();                      //这里，很重要 [delta=(last-new).inv，也就是new to last]
 
-        double norm = delta.translation().norm();;
+        double norm = delta.translation().norm();
         double angle = fabs(acos(delta.rotation().toQuaternion().w()) * 2.f * 57.3f);
 
         // 直线距离大于1m，旋转角超过5度的帧加入关键帧，最后一帧也加入
@@ -84,7 +86,7 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         initial_estimate.insert(key, curr_pose);
         key++;
 
-        timestamp_buff.push_back(path_.poses[i].header.stamp.toSec()); //时间戳   
+        timestamp_buff.push_back(path_.poses[i].header.stamp.toSec()); //时间戳
     }
 
     ROS_INFO("ISAM2 correct loop");
@@ -127,7 +129,6 @@ void LoopClosure::HandleLoopClosures(bool bforce)
         return;
     }
 
- 
     ROS_INFO("loop closure with %d and %d", start_key, loop_key);
 
     // 5.
@@ -138,8 +139,8 @@ void LoopClosure::HandleLoopClosures(bool bforce)
     ROS_INFO("generate new map");
     GenerateMap();
 
-    ROS_INFO("generate 3dof map");
-    Generate3DofMap();
+    // ROS_INFO("generate 3dof map");
+    // Generate3DofMap();
 }
 
 bool LoopClosure::FindPointCloud(double timestamp, PointCloud &cloud)
@@ -413,13 +414,75 @@ void LoopClosure::Generate3DofMap()
     map_octree.reset();
 }
 
+void LoopClosure::GenerateMap4Dof()
+{
+    ROS_INFO("GenerateMap4Dof");
+
+    // Initialize the map octree.
+    PointCloud::Ptr regenerated_map(new PointCloud);
+    PointCloud::Ptr map_data;
+    map_data.reset(new PointCloud);
+    map_data->header.frame_id = "world";
+    pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>::Ptr map_octree;
+    map_octree.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>(0.02)); //octree_resolution:0.05
+    map_octree->setInputCloud(map_data);
+
+    for (const auto &pose_stamped : path_4dof_.poses)
+    {
+        bool find_scan = false;
+        uint64_t t = (uint64_t)(pose_stamped.header.stamp.toSec() * 1000000.f);
+        PointCloud::Ptr scan_filtered(new PointCloud);
+        for (auto &scan : points_buf_)
+        {
+            // printf("%lf -----> %lf\n", (double)scan.header.stamp / 1000000.f, t);
+            if (scan.header.stamp == t)
+            {
+                *scan_filtered = scan;
+                find_scan = true;
+                break;
+            }
+        }
+        if (!find_scan)
+            continue;
+
+        PointCloud::Ptr scan_world(new PointCloud);
+        Eigen::Matrix4d b2w = PosestampedToEigen(pose_stamped);
+        pcl::transformPointCloud(*scan_filtered, *scan_world, b2w);
+        *regenerated_map += *scan_world;
+    }
+
+    ROS_INFO("regenerated map points: %lu", regenerated_map->points.size());
+    if (regenerated_map->points.size() == 0)
+        return;
+
+    // oct tree
+    for (size_t ii = 0; ii < regenerated_map->points.size(); ii++)
+    {
+        const pcl::PointXYZ p = regenerated_map->points[ii];
+        if (!map_octree->isVoxelOccupiedAtPoint(p))
+            map_octree->addPointToCloud(p, map_data);
+    }
+
+    // publish result
+    ROS_INFO("octomap points: %lu", map_data->points.size());
+    pub_octmap_.publish(map_data);
+
+    // save
+    ROS_INFO("save map");
+    pcl::io::savePCDFileASCII("map_4dof.pcd", *map_data);
+
+    // release pcl buffer
+    map_data->clear();
+    map_octree.reset();
+}
+
 void LoopClosure::FiltPoints(const PointCloud::ConstPtr &points, PointCloud::Ptr points_filtered)
 {
     // Copy input points.
     *points_filtered = *points;
 
     bool random_filter = true;
-    double decimate_percentage = 0.8;
+    double decimate_percentage = 0.9;
     if (random_filter)
     {
         const int n_points = static_cast<int>((1.0 - decimate_percentage) * points_filtered->size());
@@ -568,4 +631,167 @@ Eigen::Matrix4d LoopClosure::PosestampedToEigen(geometry_msgs::PoseStamped pose_
     m.block(0, 3, 3, 1) = t;
 
     return m;
+}
+
+void LoopClosure::Handle4DofLoopClosures()
+{
+    ROS_INFO("Handle 4dof LoopClosures");
+
+    if (path_.poses.size() < 10)
+    {
+        ROS_INFO("Handle4DofLoopClosures: too few poses.");
+        return;
+    }
+
+    // 形成keyframe database
+    nav_msgs::Path key_path;
+    for (int i = 0; i < path_.poses.size(); i++)
+    {
+        Eigen::Matrix4d i2w = PosestampedToEigen(path_.poses[i]);
+
+        // 直线距离大于1m，旋转角超过5度的帧加入关键帧，最后一帧也加入
+        if (i > 0 && i < path_.poses.size() - 1)
+        {
+            int n = key_path.poses.size();
+            Eigen::Matrix4d j2w = PosestampedToEigen(key_path.poses[n - 1]);
+            Eigen::Matrix4d j2i = i2w.inverse() * j2w;
+            Eigen::Matrix3d tmp_r = j2i.block(0, 0, 3, 3);
+            Eigen::Quaterniond delta_w(tmp_r);
+            double norm = sqrt(pow(j2i(0, 3), 2) + pow(j2i(1, 3), 2) + pow(j2i(2, 3), 2));
+            double angle = fabs(acos(delta_w.w()) * 2.f * 57.3f);
+            if (!((norm > 1 || angle > 5) && i < path_.poses.size() - 1))
+                continue;
+        }
+        key_path.poses.push_back(path_.poses[i]);
+    }
+
+    int pose_size = key_path.poses.size();
+    ROS_INFO("key poses: %d", pose_size);
+
+    int connected_index = 0;
+    int loop_index = pose_size - 1;
+    int max_length = pose_size;
+    double t_array[max_length][3];
+    double euler_array[max_length][3];
+    Eigen::Quaterniond q_array[max_length];
+
+    // 1.prepare problem
+    ceres::Problem problem;
+    ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1); //loss_function = new ceres::CauchyLoss(1.0);
+    ceres::LocalParameterization *angle_local_parameterization = AngleLocalParameterization::Create();
+
+    for (int i = 0; i < key_path.poses.size(); i++)
+    {
+        // get pose
+        Eigen::Matrix4d b2w = PosestampedToEigen(key_path.poses[i]);
+        t_array[i][0] = b2w(0, 3);
+        t_array[i][1] = b2w(1, 3);
+        t_array[i][2] = b2w(2, 3);
+
+        Eigen::Matrix3d tmp_r;
+        tmp_r = b2w.block(0, 0, 3, 3);
+        Eigen::Quaterniond tmp_q(tmp_r);
+        q_array[i] = tmp_q;
+
+        Eigen::Vector3d euler_angle = Utility::R2ypr(tmp_q.toRotationMatrix());
+        euler_array[i][0] = euler_angle.x();
+        euler_array[i][1] = euler_angle.y();
+        euler_array[i][2] = euler_angle.z();
+
+        // add parameter block
+        problem.AddParameterBlock(euler_array[i], 1, angle_local_parameterization);
+        problem.AddParameterBlock(t_array[i], 3);
+
+        // fix the first pose
+        if (connected_index == i)
+        {
+            problem.SetParameterBlockConstant(euler_array[i]);
+            problem.SetParameterBlockConstant(t_array[i]);
+        }
+
+        // add edge
+        for (int j = 1; j < 2; j++)
+        {
+            if (i - j >= 0)
+            {
+                Eigen::Vector3d euler_conncected = Utility::R2ypr(q_array[i - j].toRotationMatrix());
+                Eigen::Vector3d relative_t(t_array[i][0] - t_array[i - j][0], t_array[i][1] - t_array[i - j][1], t_array[i][2] - t_array[i - j][2]);
+                relative_t = q_array[i - j].inverse() * relative_t;
+                double relative_yaw = euler_array[i][0] - euler_array[i - j][0];
+                ceres::CostFunction *cost_function = FourDOFError::Create(relative_t.x(), relative_t.y(), relative_t.z(),
+                                                                          relative_yaw, euler_conncected.y(), euler_conncected.z());
+                problem.AddResidualBlock(cost_function, NULL, euler_array[i - j], t_array[i - j], euler_array[i], t_array[i]);
+            }
+        }
+
+        // add loop adge
+        if (loop_index == i)
+        {
+            double start_time = key_path.poses[connected_index].header.stamp.toSec();
+            double loop_time = key_path.poses[loop_index].header.stamp.toSec();
+            PointCloud scan_start, scan_end;
+            if (!(FindPointCloud(loop_time, scan_end) && FindPointCloud(start_time, scan_start)))
+            {
+                ROS_ERROR("can't find scans: %lf %lf", start_time, loop_time);
+                return;
+            }
+
+            // delta代表 从end到start的变换，以end为参考系
+            Eigen::Matrix4d pose_start = PosestampedToEigen(key_path.poses[connected_index]);
+            //pose_start = Eigen::Matrix4d::Identity();
+            gtsam::Pose3 delta;
+            if (PerformICP(scan_end.makeShared(), scan_start.makeShared(), pose_start, delta))
+            {
+                Eigen::Vector3d euler_conncected = Utility::R2ypr(q_array[connected_index].toRotationMatrix());
+                Eigen::Matrix4d delta_trans = GtsamToEigen(delta);
+                Eigen::Vector3d relative_t(delta_trans(0, 3), delta_trans(1, 3), delta_trans(2, 3));
+                Eigen::Matrix3d relative_r;
+                relative_r = delta_trans.block(0, 0, 3, 3);
+                double relative_yaw = Utility::R2ypr(relative_r)[0]; // = (*it)->getLoopRelativeYaw();
+                ceres::CostFunction *cost_function = FourDOFWeightError::Create(relative_t.x(), relative_t.y(), relative_t.z(),
+                                                                                relative_yaw, euler_conncected.y(), euler_conncected.z());
+                problem.AddResidualBlock(cost_function, loss_function, euler_array[connected_index], t_array[connected_index], euler_array[i], t_array[i]);
+            }
+        }
+    }
+
+    // 2.solve problem
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+    //options.linear_solver_type = ceres::DENSE_SCHUR;
+    //options.trust_region_strategy_type = ceres::DOGLEG;
+    options.max_num_iterations = 20;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+    //std::cout << summary.BriefReport() << "\n";
+    std::cout << summary.FullReport() << "\n";
+
+    ROS_INFO("loop closure with %d and %d", connected_index, loop_index);
+
+    // 3.publish path
+    ROS_INFO("publish path");
+    nav_msgs::Path path_4dof;
+    path_4dof.header = path_.header;
+    for (int i = 0; i < key_path.poses.size(); i++)
+    {
+        Eigen::Quaterniond tmp_q;
+        tmp_q = Utility::ypr2R(Eigen::Vector3d(euler_array[i][0], euler_array[i][1], euler_array[i][2]));
+
+        geometry_msgs::PoseStamped pose_stamped = key_path.poses[i];
+        pose_stamped.pose.orientation.w = tmp_q.w();
+        pose_stamped.pose.orientation.x = tmp_q.x();
+        pose_stamped.pose.orientation.y = tmp_q.y();
+        pose_stamped.pose.orientation.z = tmp_q.z();
+        pose_stamped.pose.position.x = t_array[i][0];
+        pose_stamped.pose.position.y = t_array[i][1];
+        pose_stamped.pose.position.z = t_array[i][2];
+
+        path_4dof.poses.push_back(pose_stamped);
+    }
+    path_4dof_ = path_4dof;
+    pub_path_4dof_.publish(path_4dof_);
+
+    // 4.generate map
+    ROS_INFO("generate map");
+    GenerateMap4Dof();
 }

@@ -152,6 +152,7 @@ add_executable(${PROJECT_NAME}_loopclosure_node
   src/loop_closure/loop_closure.cc)
 target_link_libraries(${PROJECT_NAME}_loopclosure_node
   gtsam
+  ceres
   ${catkin_LIBRARIES}
 )
 

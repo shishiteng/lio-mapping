@@ -30,6 +30,15 @@ void CommandProcess(LoopClosure *lp_ptr)
             ROS_INFO("HandleLoopClosures cost: %f", (ros::Time::now() - stime).toSec());
             m_process_.unlock();
         }
+        else if (key == '4')
+        {
+            printf("4dof loop closure...\n");
+            m_process_.lock();
+            ros::Time stime = ros::Time::now();
+            lp_ptr->Handle4DofLoopClosures();
+            ROS_INFO("Handle4DofLoopClosures cost: %f", (ros::Time::now() - stime).toSec());
+            m_process_.unlock();
+        }
 
         std::chrono::milliseconds dura(5);
         std::this_thread::sleep_for(dura);

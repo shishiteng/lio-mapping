@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /TF1
         - /TF1/Frames1
+        - /TF1/Frames1/laser_local1
         - /TF1/Frames1/aft_4d_mapped1
         - /TF1/Frames1/aft_4d_mapped1/Position1
         - /surrounding1/Autocompute Value Bounds1
@@ -14,7 +15,9 @@ Panels:
         - /predict_odom1/Shape1
         - /Map1/map_surf1
         - /Map1/predict_surf1
-        - /LoopMap1
+        - /PathLoop1
+        - /Path4Dof1
+        - /LoopMap1/Autocompute Value Bounds1
       Splitter Ratio: 0.749279559
     Tree Height: 482
   - Class: rviz/Selection
@@ -418,31 +421,31 @@ Visualization Manager:
       Buffer Length: 1
       Class: rviz/Path
       Color: 255; 255; 0
-      Enabled: false
+      Enabled: true
       Head Diameter: 0.300000012
       Head Length: 0.200000003
-      Length: 10
+      Length: 1
       Line Style: Lines
       Line Width: 0.0299999993
-      Name: Path3Dof
+      Name: Path4Dof
       Offset:
         X: 0
         Y: 0
         Z: 0
       Pose Color: 255; 85; 255
       Pose Style: None
-      Radius: 0.5
+      Radius: 0.100000001
       Shaft Diameter: 0.100000001
       Shaft Length: 0.100000001
-      Topic: /loop_closure/path_loop_3dof
+      Topic: /loop_closure/path_loop_4dof
       Unreliable: false
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 37.2228889
-        Min Value: -16.092371
-        Value: true
+        Max Value: 10
+        Min Value: -10
+        Value: false
       Axis: Z
       Channel Name: intensity
       Class: rviz/PointCloud2
@@ -459,9 +462,9 @@ Visualization Manager:
       Position Transformer: XYZ
       Queue Size: 1
       Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.00999999978
-      Style: Flat Squares
+      Size (Pixels): 1
+      Size (m): 1
+      Style: Points
       Topic: /oct_map
       Unreliable: false
       Use Fixed Frame: true
@@ -522,25 +525,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 269.36795
+      Distance: 167.851685
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.0599999987
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 3.68613076
-        Y: -0.536543012
-        Z: -14.8125391
+        X: 23.2468891
+        Y: 34.3861427
+        Z: -24.0416985
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.0500000007
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.00999999978
-      Pitch: 1.4847964
+      Pitch: 1.56979632
       Target Frame: aft_4d_mapped
       Value: Orbit (rviz)
-      Yaw: 4.69483852
+      Yaw: 4.75483656
     Saved: ~
 Window Geometry:
   Displays:
